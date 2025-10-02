@@ -14,6 +14,8 @@
 #include <sys/msg.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <time.h>
+#include <ctype.h>
 
 #include "chat.h"
 
@@ -35,6 +37,46 @@ struct room_info {
 static int global_queue_id = -1;
 static struct room_info rooms[MAX_ROOMS] = {0};
 static pthread_mutex_t rooms_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// --- Persistencia de historial ---
+static void sanitize_name(const char *in, char *out, size_t out_size) {
+    if (!in || !out || out_size == 0) return;
+    size_t j = 0;
+    for (size_t i = 0; in[i] != '\0' && j + 1 < out_size; ++i) {
+        unsigned char c = (unsigned char)in[i];
+        if (isalnum(c) || c == '_' || c == '-') {
+            out[j++] = (char)c;
+        } else {
+            out[j++] = '_';
+        }
+    }
+    if (j == 0) {
+        out[j++] = 's'; out[j++] = 'a'; out[j++] = 'l'; out[j++] = 'a';
+    }
+    out[j] = '\0';
+}
+
+static void build_history_path(const char *room_name, char *out, size_t out_size) {
+    char safe[MAX_NAME];
+    sanitize_name(room_name, safe, sizeof(safe));
+    snprintf(out, out_size, "historial_%s.log", safe);
+}
+
+static void append_room_history(const char *room_name, const char *line) {
+    if (!room_name || room_name[0] == '\0' || !line) return;
+    char path[256];
+    build_history_path(room_name, path, sizeof(path));
+
+    FILE *f = fopen(path, "a");
+    if (!f) return; // no interrumpir el servicio por errores de IO
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    char ts[20];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+    fprintf(f, "[%s] %s\n", ts, line);
+    fclose(f);
+}
 
 static void cleanup_global_queue(void) {
     if (global_queue_id != -1) {
@@ -154,6 +196,14 @@ static void *room_thread_func(void *arg) {
             pthread_mutex_unlock(&rooms_mutex);
             continue;
         }
+        char room_name[MAX_NAME];
+        strncpy(room_name, rooms[room_idx].name, MAX_NAME - 1);
+        room_name[MAX_NAME - 1] = '\0';
+        // Log de mensaje de chat
+        char line[MAX_TEXT + MAX_NAME + 32];
+        int n = snprintf(line, sizeof(line), "%s: %s", msg.sender, msg.text);
+        (void)n;
+        append_room_history(room_name, line);
         // Difundir a todos menos al remitente
         broadcast_text_to_room_locked(room_idx, msg.sender, msg.text, msg.pid);
         pthread_mutex_unlock(&rooms_mutex);
@@ -300,9 +350,10 @@ static void handle_join(const struct chat_message *msg) {
     snprintf(joined_text, sizeof(joined_text), "Te has unido a la sala: %s", rooms[room_idx].name);
     send_global_response(msg->pid, SRV_INFO, rooms[room_idx].name, joined_text, room_qid);
 
-    // Aviso a los demás
+    // Aviso y log a los demás
     char notice[MAX_TEXT];
     snprintf(notice, sizeof(notice), "%s se ha unido a la sala.", msg->sender);
+    append_room_history(rooms[room_idx].name, notice);
     broadcast_text_to_room_locked(room_idx, "Servidor", notice, msg->pid);
 
     pthread_mutex_unlock(&rooms_mutex);
@@ -329,6 +380,7 @@ static void handle_leave(const struct chat_message *msg) {
 
     char notice[MAX_TEXT];
     snprintf(notice, sizeof(notice), "%s ha salido de la sala.", msg->sender);
+    append_room_history(room_name, notice);
     broadcast_text_to_room_locked(room_idx, "Servidor", notice, msg->pid);
 
     // Si la sala queda vacía, eliminar la cola y cerrar hilo

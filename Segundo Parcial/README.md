@@ -36,3 +36,4 @@ gcc cliente.c -o cliente -lpthread
 - El servidor usa una cola global para control y crea una cola por cada sala.
 - Los clientes envían mensajes a la cola de su sala y reciben difusiones filtrando por su PID.
 - El servidor gestiona la lista de salas y los usuarios inscritos en cada una.
+- Persistencia: el servidor guarda el historial por sala en archivos `historial_<sala>.log` en el mismo directorio. Se registran mensajes, uniones y salidas con timestamp.
