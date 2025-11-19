@@ -1,298 +1,183 @@
+#include <windows.h>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <algorithm>
-#include "file_manager.h"
-#include "compressor.h"
-#include "encryptor.h"
-#include "thread_manager.h"
+#include "FileManager.h"
+#include "Concurrency.h"
+#include "Compression.h"
+#include "Encryption.h"
 
-struct Options {
+struct Config {
     bool compress = false;
     bool decompress = false;
     bool encrypt = false;
     bool decrypt = false;
-    std::string compressionAlgorithm = "huffman";
-    std::string encryptionAlgorithm = "vigenere";
+    std::string compAlg;
+    std::string encAlg;
     std::string inputPath;
     std::string outputPath;
     std::string key;
 };
 
-void showHelp() {
-    std::cout << "Uso: fileutil [opciones]\n\n";
-    std::cout << "Operaciones:\n";
-    std::cout << "  -c              Comprimir\n";
-    std::cout << "  -d              Descomprimir\n";
-    std::cout << "  -e              Encriptar\n";
-    std::cout << "  -u              Desencriptar\n";
-    std::cout << "  Las operaciones se pueden combinar (ej: -ce para comprimir y encriptar)\n\n";
-    std::cout << "Opciones:\n";
-    std::cout << "  --comp-alg      Algoritmo de compresión (huffman) [default: huffman]\n";
-    std::cout << "  --enc-alg       Algoritmo de encriptación (vigenere) [default: vigenere]\n";
-    std::cout << "  -i <ruta>       Ruta de entrada (archivo o directorio)\n";
-    std::cout << "  -o <ruta>       Ruta de salida (archivo o directorio)\n";
-    std::cout << "  -k <clave>      Clave secreta para encriptación/desencriptación\n";
-    std::cout << "  -h, --help      Mostrar esta ayuda\n\n";
-    std::cout << "Ejemplos:\n";
-    std::cout << "  fileutil -c -i archivo.txt -o archivo.huf\n";
-    std::cout << "  fileutil -ce -i directorio/ -o comprimido/ -k mi_clave\n";
-    std::cout << "  fileutil -du -i archivo.enc -o archivo.txt -k mi_clave\n";
+struct ThreadData {
+    std::string filePath;
+    Config config;
+};
+
+DWORD WINAPI ProcessFile(LPVOID lpParam) {
+    ThreadData* data = static_cast<ThreadData*>(lpParam);
+    std::string inputPath = data->filePath;
+    Config config = data->config;
+
+    std::cout << "Processing: " << inputPath << std::endl;
+
+    std::vector<char> buffer;
+    if (!FileManager::ReadFileContent(inputPath, buffer)) {
+        delete data;
+        return 1;
+    }
+
+    // Order of operations:
+    // Compress -> Encrypt
+    // Decrypt -> Decompress
+
+    if (config.compress) {
+        // Only RLE supported for now
+        buffer = Compression::CompressRLE(buffer);
+    }
+
+    if (config.encrypt) {
+        buffer = Encryption::EncryptVigenere(buffer, config.key);
+    }
+
+    if (config.decrypt) {
+        buffer = Encryption::DecryptVigenere(buffer, config.key);
+    }
+
+    if (config.decompress) {
+        buffer = Compression::DecompressRLE(buffer);
+    }
+
+    // Construct output path
+    // If output is a directory, append filename. If file, use as is (only for single file input).
+    // For simplicity, let's assume -o specifies an output directory if input is a directory, 
+    // or a full path if input is a file.
+    
+    std::string outPath;
+    if (FileManager::IsDirectory(config.outputPath)) {
+         // It's a directory, append filename + suffix
+         std::string suffix = "";
+         if (config.compress) suffix += ".rle";
+         if (config.encrypt) suffix += ".enc";
+         // If decrypting/decompressing, maybe remove suffix? 
+         // For this simple implementation, let's just append ".out" if not specified.
+         if (config.decompress || config.decrypt) suffix += ".dec";
+         
+         outPath = FileManager::CreateOutputPath(inputPath, config.outputPath, suffix);
+    } else {
+        // It's a file path
+        outPath = config.outputPath;
+    }
+
+    if (!FileManager::WriteFileContent(outPath, buffer)) {
+        delete data;
+        return 1;
+    }
+
+    std::cout << "Finished: " << outPath << std::endl;
+    delete data;
+    return 0;
 }
 
-bool parseArguments(int argc, char* argv[], Options& opts) {
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        
-        if (arg == "-h" || arg == "--help") {
-            showHelp();
-            return false;
-        }
-        else if (arg == "--comp-alg" && i + 1 < argc) {
-            opts.compressionAlgorithm = argv[++i];
-        }
-        else if (arg == "--enc-alg" && i + 1 < argc) {
-            opts.encryptionAlgorithm = argv[++i];
-        }
-        else if (arg == "-i" && i + 1 < argc) {
-            opts.inputPath = argv[++i];
-        }
-        else if (arg == "-o" && i + 1 < argc) {
-            opts.outputPath = argv[++i];
-        }
-        else if (arg == "-k" && i + 1 < argc) {
-            opts.key = argv[++i];
-        }
-        else if (arg.length() > 1 && arg[0] == '-' && arg[1] != '-') {
-            for (size_t j = 1; j < arg.length(); j++) {
-                char c = arg[j];
-                if (c == 'c') {
-                    opts.compress = true;
-                }
-                else if (c == 'd') {
-                    opts.decompress = true;
-                }
-                else if (c == 'e') {
-                    opts.encrypt = true;
-                }
-                else if (c == 'u') {
-                    opts.decrypt = true;
-                }
-            }
-        }
-    }
-    
-    if (opts.inputPath.empty() || opts.outputPath.empty()) {
-        std::cerr << "Error: Se requieren -i y -o\n";
-        showHelp();
-        return false;
-    }
-    
-    if (!opts.compress && !opts.decompress && !opts.encrypt && !opts.decrypt) {
-        std::cerr << "Error: Se debe especificar al menos una operación (-c, -d, -e, -u)\n";
-        showHelp();
-        return false;
-    }
-    
-    if ((opts.encrypt || opts.decrypt) && opts.key.empty()) {
-        std::cerr << "Error: Se requiere -k para operaciones de encriptación/desencriptación\n";
-        return false;
-    }
-    
-    return true;
-}
-
-std::string getOutputFileName(const std::string& inputFile, const Options& opts, const std::string& inputBasePath = "") {
-    std::string outputFile = opts.outputPath;
-    
-    bool isOutputDir = FileManager::isDirectory(opts.outputPath) || 
-                       opts.outputPath.back() == '\\' || 
-                       opts.outputPath.back() == '/';
-    
-    if (!isOutputDir && !FileManager::isFile(opts.outputPath)) {
-        size_t lastDot = opts.outputPath.find_last_of(".");
-        size_t lastSlash = opts.outputPath.find_last_of("\\/");
-        
-        if (lastDot == std::string::npos || (lastSlash != std::string::npos && lastDot < lastSlash)) {
-            isOutputDir = true;
-            FileManager::createDirectory(opts.outputPath);
-        }
-    }
-    
-    if (isOutputDir) {
-        if (!outputFile.empty() && outputFile.back() != '\\' && outputFile.back() != '/') {
-            outputFile += "\\";
-        }
-        
-        if (!inputBasePath.empty()) {
-            std::string relativePath = inputFile;
-            std::string normalizedBase = inputBasePath;
-            if (normalizedBase.back() != '\\' && normalizedBase.back() != '/') {
-                normalizedBase += "\\";
-            }
-            
-            if (relativePath.find(normalizedBase) == 0) {
-                relativePath = relativePath.substr(normalizedBase.length());
-            } else {
-                size_t lastSlash = inputFile.find_last_of("\\/");
-                relativePath = (lastSlash == std::string::npos) ? inputFile : inputFile.substr(lastSlash + 1);
-            }
-            
-            outputFile += relativePath;
-        } else {
-            size_t lastSlash = inputFile.find_last_of("\\/");
-            std::string fileName = (lastSlash == std::string::npos) ? inputFile : inputFile.substr(lastSlash + 1);
-            outputFile += fileName;
-        }
-    }
-    
-    std::string extension;
-    if (opts.compress) extension += ".huf";
-    if (opts.encrypt) extension += ".enc";
-    
-    if (opts.decompress) {
-        size_t extPos = outputFile.find(".huf");
-        if (extPos != std::string::npos) {
-            outputFile.erase(extPos, 4);
-        }
-    }
-    if (opts.decrypt) {
-        size_t extPos = outputFile.find(".enc");
-        if (extPos != std::string::npos) {
-            outputFile.erase(extPos, 4);
-        }
-    }
-    
-    if (!extension.empty() && outputFile.find(extension) == std::string::npos) {
-        outputFile += extension;
-    }
-    
-    return outputFile;
-}
-
-bool processFile(const std::string& inputFile, const std::string& outputFile, const Options& opts) {
-    std::vector<unsigned char> data;
-    
-    if (!FileManager::readFile(inputFile, data)) {
-        return false;
-    }
-    
-    if (opts.decrypt) {
-        Encryptor encryptor(opts.key);
-        data = encryptor.decrypt(data);
-        if (data.empty()) {
-            std::cerr << "Error desencriptando archivo: " << inputFile << std::endl;
-            return false;
-        }
-    }
-    
-    if (opts.decompress) {
-        Compressor compressor;
-        data = compressor.decompress(data);
-    }
-    
-    if (opts.compress) {
-        Compressor compressor;
-        data = compressor.compress(data);
-    }
-    
-    if (opts.encrypt) {
-        Encryptor encryptor(opts.key);
-        data = encryptor.encrypt(data);
-        if (data.empty()) {
-            std::cerr << "Error encriptando archivo: " << inputFile << std::endl;
-            return false;
-        }
-    }
-    
-    return FileManager::writeFile(outputFile, data);
+void PrintUsage() {
+    std::cout << "Usage: program -[c|d|e|u] -i <input> -o <output> [-k <key>] [--comp-alg <alg>] [--enc-alg <alg>]" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    Options opts;
-    
-    if (!parseArguments(argc, argv, opts)) {
+    Config config;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg.size() > 1 && arg[0] == '-' && arg[1] != '-') {
+            // Short options (e.g. -c, -ce, -ud)
+            for (size_t j = 1; j < arg.size(); ++j) {
+                char c = arg[j];
+                if (c == 'c') config.compress = true;
+                else if (c == 'd') config.decompress = true;
+                else if (c == 'e') config.encrypt = true;
+                else if (c == 'u') config.decrypt = true;
+                else if (c == 'i') {
+                    if (i + 1 < argc) config.inputPath = argv[++i];
+                    break; // Stop parsing this arg string
+                }
+                else if (c == 'o') {
+                    if (i + 1 < argc) config.outputPath = argv[++i];
+                    break;
+                }
+                else if (c == 'k') {
+                    if (i + 1 < argc) config.key = argv[++i];
+                    break;
+                }
+                // Note: -i, -o, -k usually take next arg, but if they are combined like -io, it's ambiguous. 
+                // Standard behavior is usually not to combine taking-arg flags with others in a way that hides the arg.
+                // But for -ce, -ud it works.
+                // My previous parser handled -i, -o, -k as separate tokens. 
+                // Let's keep -i, -o, -k as separate tokens if possible, or handle them if they are the last char.
+                // For safety, let's assume -i, -o, -k are ALWAYS separate flags in the usage example, 
+                // but -c, -d, -e, -u can be combined.
+            }
+            
+            // Special handling for flags that expect arguments but were passed separately in previous logic
+            // If the loop above didn't handle i, o, k because they were not in the combined string (or we want to support -i value)
+            // Actually, the previous logic was:
+            // if (arg == "-i") ...
+            
+            // Let's refine:
+            // If it's exactly "-i", "-o", "-k", treat as before.
+            // If it's a combined flag like "-ce", parse chars.
+            // But wait, "-i" matches the combined logic 'i'.
+            
+            // To be robust and simple:
+            // Iterate chars. If 'c', 'd', 'e', 'u' set flag.
+            // If 'i', 'o', 'k', consume next argv.
+            
+            // But wait, if I have "-ce", loop runs for 'c', then 'e'.
+            // If I have "-i", loop runs for 'i'.
+        }
+        else if (arg == "--comp-alg" && i + 1 < argc) config.compAlg = argv[++i];
+        else if (arg == "--enc-alg" && i + 1 < argc) config.encAlg = argv[++i];
+    }
+
+    if (config.inputPath.empty() || config.outputPath.empty()) {
+        PrintUsage();
         return 1;
     }
-    
-    bool isInputDir = FileManager::isDirectory(opts.inputPath);
-    bool isInputFile = FileManager::isFile(opts.inputPath);
-    
-    if (!isInputDir && !isInputFile) {
-        std::cerr << "Error: La ruta de entrada no existe: " << opts.inputPath << std::endl;
+
+    // Validate logic
+    if ((config.compress && config.decompress) || (config.encrypt && config.decrypt)) {
+        std::cerr << "Invalid combination of operations." << std::endl;
         return 1;
     }
-    
-    if (isInputFile) {
-        std::string outputFile = getOutputFileName(opts.inputPath, opts);
-        
-        if (processFile(opts.inputPath, outputFile, opts)) {
-            std::cout << "Archivo procesado exitosamente: " << opts.inputPath << " -> " << outputFile << std::endl;
-            return 0;
-        } else {
-            std::cerr << "Error procesando archivo: " << opts.inputPath << std::endl;
-            return 1;
+
+    std::vector<std::string> files;
+    if (FileManager::IsDirectory(config.inputPath)) {
+        files = FileManager::GetFiles(config.inputPath);
+    } else {
+        files.push_back(config.inputPath);
+    }
+
+    std::vector<HANDLE> threads;
+    for (const auto& file : files) {
+        ThreadData* data = new ThreadData{file, config};
+        HANDLE hThread = Concurrency::RunTask(ProcessFile, data);
+        if (hThread) {
+            threads.push_back(hThread);
         }
     }
-    
-    std::vector<std::string> files = FileManager::getAllFiles(opts.inputPath);
-    
-    if (files.empty()) {
-        std::cout << "No se encontraron archivos en el directorio: " << opts.inputPath << std::endl;
-        return 0;
-    }
-    
-    std::cout << "Procesando " << files.size() << " archivo(s) de forma concurrente..." << std::endl;
-    
-    ThreadManager threadManager;
-    
-    std::string normalizedInputPath = opts.inputPath;
-    if (normalizedInputPath.back() != '\\' && normalizedInputPath.back() != '/') {
-        normalizedInputPath += "\\";
-    }
-    auto getOutputPath = [&opts, normalizedInputPath](const std::string& inputFile) -> std::string {
-        return getOutputFileName(inputFile, opts, normalizedInputPath);
-    };
-    
-    auto processOperation = [&opts](const std::vector<unsigned char>& input, std::vector<unsigned char>& output) -> bool {
-        std::vector<unsigned char> data = input;
-        
-        if (opts.decrypt) {
-            Encryptor encryptor(opts.key);
-            data = encryptor.decrypt(data);
-            if (data.empty() && !input.empty()) {
-                return false;
-            }
-        }
-        
-        if (opts.decompress) {
-            Compressor compressor;
-            data = compressor.decompress(data);
-        }
-        
-        if (opts.compress) {
-            Compressor compressor;
-            data = compressor.compress(data);
-        }
-        
-        if (opts.encrypt) {
-            Encryptor encryptor(opts.key);
-            data = encryptor.encrypt(data);
-            if (data.empty() && !input.empty()) {
-                return false;
-            }
-        }
-        
-        output = data;
-        return true;
-    };
-    
-    threadManager.processFilesConcurrently(files, opts.outputPath, getOutputPath, processOperation);
-    threadManager.waitForCompletion();
-    
-    std::cout << "\nProcesamiento completado:\n";
-    std::cout << "  Archivos procesados: " << threadManager.getProcessedCount() << std::endl;
-    std::cout << "  Archivos con error: " << threadManager.getFailedCount() << std::endl;
-    
-    return threadManager.getFailedCount() == 0 ? 0 : 1;
+
+    Concurrency::WaitForAll(threads);
+
+    std::cout << "All tasks completed." << std::endl;
+    return 0;
 }

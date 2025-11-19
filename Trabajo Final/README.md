@@ -1,225 +1,93 @@
-# FileUtil - Utilidad de Compresión y Encriptación
+# Proyecto Final de Sistemas Operativos - Utilidad de Compresión y Encriptación
 
-Utilidad de línea de comandos en C++ para comprimir/descomprimir y encriptar/desencriptar archivos o directorios completos de manera eficiente usando procesamiento concurrente.
+**Estudiante:** Mateo Lopera Ortiz  
+**Materia:** Sistemas Operativos
 
-## Características
+---
 
-- **Compresión sin pérdida**: Algoritmo Huffman implementado desde cero
-- **Encriptación simétrica**: Algoritmo Vigenère mejorado con XOR
-- **Procesamiento concurrente**: Múltiples archivos procesados en paralelo usando threads
-- **Llamadas directas al sistema**: Usa Windows API (CreateFile, ReadFile, WriteFile) en lugar de abstracciones estándar
-- **Sin dependencias externas**: Todos los algoritmos implementados manualmente
+## 1. Introducción
+Este proyecto consiste en el desarrollo de una herramienta de línea de comandos (CLI) en C++ que permite comprimir, descomprimir, encriptar y desencriptar archivos y directorios. El objetivo principal es aplicar conceptos de bajo nivel como llamadas al sistema (Windows API), gestión de memoria y concurrencia para procesar múltiples archivos de manera eficiente.
 
-## Requisitos
+La herramienta, llamada `so_final`, fue construida desde cero sin utilizar librerías externas para los algoritmos de compresión o encriptación, cumpliendo con los requisitos del reto.
 
-- Compilador C++11 compatible (GCC, MinGW, MSVC)
-- Sistema operativo Windows (usa Windows API)
-- Make (opcional, para usar el Makefile)
+## 2. Diseño de la Solución
+La arquitectura del software es modular, separando claramente las responsabilidades:
 
-## Compilación
+- **Main**: Maneja la interacción con el usuario (CLI) y orquesta el flujo de trabajo.
+- **FileManager**: Encapsula las llamadas al sistema de Windows (`CreateFile`, `ReadFile`, `WriteFile`, `FindFirstFile`) para interactuar con el disco.
+- **Concurrency**: Gestiona la creación y sincronización de hilos (`CreateThread`, `WaitForMultipleObjects`) para procesar archivos en paralelo.
+- **Algorithms**: Contiene la lógica pura de compresión (RLE) y encriptación (Vigenère).
 
-### Usando Makefile:
+### Flujo de Datos
+1. El usuario ejecuta el comando con los parámetros deseados.
+2. El programa identifica si la entrada es un archivo o un directorio.
+3. Si es un directorio, se listan todos los archivos.
+4. Para cada archivo, se lanza un hilo independiente.
+5. Cada hilo lee el archivo, aplica las transformaciones (Compresión -> Encriptación o viceversa) y escribe el resultado.
 
+## 3. Justificación de Algoritmos
+
+### Compresión: Run-Length Encoding (RLE)
+Elegí **RLE** por su simplicidad y eficiencia en datos con alta redundancia consecutiva (como imágenes simples o logs repetitivos).
+- **Ventajas**: Muy rápido de implementar y ejecutar (O(n)). No requiere diccionarios complejos en memoria.
+- **Desventajas**: No comprime bien archivos con alta entropía (texto natural variado).
+- **Por qué RLE**: Dado el tiempo y el enfoque en la arquitectura de sistemas operativos (llamadas al sistema y concurrencia), RLE permite demostrar la manipulación de buffers byte a byte sin la complejidad de LZW o Huffman, cumpliendo el requisito de "algoritmo propio".
+
+### Encriptación: Cifrado Vigenère
+Implementé **Vigenère**, un cifrado polialfabético.
+- **Ventajas**: Más seguro que un cifrado César simple, ya que la clave altera el desplazamiento en cada byte.
+- **Desventajas**: Vulnerable al criptoanálisis moderno si la clave es corta.
+- **Por qué Vigenère**: Es un algoritmo clásico que permite entender los fundamentos de la criptografía simétrica (operaciones a nivel de byte con una clave) sin la complejidad matemática de AES. Es suficiente para demostrar la protección de datos en este contexto académico.
+
+## 4. Estrategia de Concurrencia
+Para maximizar el uso de la CPU, implementé un modelo de **hilo por archivo**.
+- Utilizo `CreateThread` de la API de Windows para lanzar una tarea por cada archivo encontrado en el directorio de entrada.
+- El hilo principal espera a que todos los hilos terminen usando `WaitForMultipleObjects`.
+- Esto permite que, mientras un hilo está bloqueado esperando I/O de disco, otro hilo pueda estar usando la CPU para comprimir o encriptar, mejorando significativamente el rendimiento en operaciones por lotes.
+
+## 5. Guía de Uso
+
+### Requisitos
+- Compilador `g++` (MinGW/MSYS2).
+- Herramienta `make`.
+
+### Compilación
+Abrir la terminal en la carpeta del proyecto y ejecutar:
 ```bash
 make
 ```
+Esto generará el ejecutable `so_final.exe`.
 
-### Compilación manual:
-
+### Ejecución
+La sintaxis general es:
 ```bash
-g++ -std=c++11 -Wall -Wextra -O2 -pthread -o fileutil.exe main.cpp file_manager.cpp compressor.cpp encryptor.cpp thread_manager.cpp
+./so_final.exe -[operaciones] -i [entrada] -o [salida] -k [clave]
 ```
 
-### Ejecutar el programa:
+**Ejemplos:**
 
-En PowerShell (Windows):
-```bash
-.\fileutil.exe --help
-.\fileutil.exe -c -i archivo.txt -o archivo.huf
-```
+1. **Comprimir y Encriptar una carpeta:**
+   ```bash
+   ./so_final.exe -ce -i "./datos_origen" -o "./datos_seguros" -k "MiClaveSecreta"
+   ```
 
-En Command Prompt (CMD):
-```bash
-fileutil.exe --help
-fileutil.exe -c -i archivo.txt -o archivo.huf
-```
+2. **Desencriptar y Descomprimir:**
+   ```bash
+   ./so_final.exe -ud -i "./datos_seguros" -o "./datos_restaurados" -k "MiClaveSecreta"
+   ```
 
-## Uso
+## 6. Caso de Uso Válido: "SecureLog Archiver"
 
-### Sintaxis básica:
+**Escenario:** Una empresa de servidores web genera gigabytes de logs de acceso diariamente (`access.log`, `error.log`). Estos logs contienen texto muy repetitivo (IPs, fechas, códigos de error) y a veces información sensible de usuarios.
 
-```
-fileutil [operaciones] [opciones]
-```
+**Problema:**
+- El almacenamiento de texto plano es costoso e ineficiente.
+- Guardar logs con datos de usuarios sin encriptar viola normativas de privacidad.
 
-### Operaciones:
+**Solución:**
+El administrador del sistema utiliza nuestra herramienta `so_final` en un script nocturno (cron job).
+- **Compresión (RLE):** Reduce drásticamente el tamaño de los logs debido a las largas secuencias de caracteres repetidos (espacios, ceros, fechas).
+- **Encriptación (Vigenère):** Ofusca el contenido para que, si alguien roba el disco de backups, no pueda leer los datos de los usuarios sin la clave.
+- **Concurrencia:** Procesa los cientos de archivos de log de diferentes servidores virtuales simultáneamente, reduciendo la ventana de tiempo de backup de horas a minutos.
 
-- `-c` : Comprimir
-- `-d` : Descomprimir
-- `-e` : Encriptar
-- `-u` : Desencriptar
-
-Las operaciones se pueden combinar (ej: `-ce` para comprimir y luego encriptar).
-
-### Opciones:
-
-- `--comp-alg [algoritmo]` : Algoritmo de compresión (actualmente solo "huffman")
-- `--enc-alg [algoritmo]` : Algoritmo de encriptación (actualmente solo "vigenere")
-- `-i <ruta>` : Ruta de entrada (archivo o directorio)
-- `-o <ruta>` : Ruta de salida (archivo o directorio)
-- `-k <clave>` : Clave secreta para encriptación/desencriptación (requerida para -e/-u)
-- `-h, --help` : Mostrar ayuda
-
-### Ejemplos:
-
-**Nota**: En PowerShell (Windows), usa `.\fileutil.exe` en lugar de `fileutil.exe` para ejecutar desde el directorio actual.
-
-```bash
-# Comprimir un archivo
-.\fileutil.exe -c -i documento.txt -o documento.huf
-
-# Comprimir y encriptar un archivo
-.\fileutil.exe -ce -i documento.txt -o documento.huf.enc -k mi_clave_secreta
-
-# Desencriptar y descomprimir
-.\fileutil.exe -du -i documento.huf.enc -o documento.txt -k mi_clave_secreta
-
-# Procesar un directorio completo
-.\fileutil.exe -ce -i carpeta/ -o carpeta_comprimida/ -k mi_clave
-
-# Solo encriptar
-.\fileutil.exe -e -i archivo.txt -o archivo.enc -k clave123
-
-# Solo descomprimir
-.\fileutil.exe -d -i archivo.huf -o archivo.txt
-```
-
-## Algoritmos Implementados
-
-### Compresión: Huffman
-
-**Justificación:**
-- Algoritmo sin pérdida ampliamente conocido y eficiente
-- Produce buena compresión para archivos con patrones repetitivos
-- Complejidad: O(n log n) para construcción del árbol, O(n) para codificación
-- Implementación relativamente simple comparada con otros algoritmos avanzados
-
-**Ventajas:**
-- Sin pérdida de información
-- Eficiente para datos con distribución no uniforme
-- Genera códigos de longitud variable optimizados
-
-**Desventajas:**
-- Requiere dos pasadas sobre los datos (construcción de árbol + codificación)
-- Puede no ser óptimo para archivos pequeños
-- El árbol debe almacenarse junto con los datos comprimidos
-
-### Encriptación: Vigenère Mejorado
-
-**Justificación:**
-- Algoritmo simétrico clásico mejorado con operaciones XOR
-- Más seguro que el Vigenère original gracias a la combinación con XOR
-- Implementación sencilla pero efectiva para el propósito educativo
-- Permite claves de longitud variable
-
-**Ventajas:**
-- Implementación relativamente simple
-- Operaciones rápidas (XOR y suma modular)
-- Resistente a análisis de frecuencia simple (gracias a XOR)
-
-**Desventajas:**
-- Menos seguro que algoritmos modernos como AES
-- Vulnerable a ataques de texto conocido si la clave es débil
-- La seguridad depende de la fortaleza de la clave
-
-## Arquitectura
-
-```
-fileutil.exe
-├── main.cpp              - Punto de entrada y parsing de argumentos
-├── file_manager.cpp      - Manejo de archivos con Windows API
-├── compressor.cpp        - Implementación de Huffman
-├── encryptor.cpp         - Implementación de Vigenère
-└── thread_manager.cpp    - Gestión de threads para concurrencia
-```
-
-## Estrategia de Concurrencia
-
-El programa utiliza threads de C++11 (`std::thread`) para procesar múltiples archivos en paralelo:
-
-1. **Detección de directorio**: Si la entrada es un directorio, se obtienen todos los archivos recursivamente
-2. **Creación de threads**: Se crea un thread por cada archivo a procesar
-3. **Sincronización**: Se usa `std::mutex` para proteger operaciones de salida compartidas
-4. **Espera de finalización**: Todos los threads se esperan antes de terminar el programa
-
-**Ventajas:**
-- Mejor aprovechamiento de sistemas multinúcleo
-- Reducción significativa del tiempo total de procesamiento
-- Escalable con el número de archivos
-
-**Consideraciones:**
-- El número máximo de threads depende del sistema operativo
-- Para archivos grandes, puede requerir más memoria
-- La sincronización añade una pequeña sobrecarga
-
-## Estructura del Proyecto
-
-```
-.
-├── main.cpp
-├── file_manager.h
-├── file_manager.cpp
-├── compressor.h
-├── compressor.cpp
-├── encryptor.h
-├── encryptor.cpp
-├── thread_manager.h
-├── thread_manager.cpp
-├── Makefile
-├── README.md
-├── TESTS.md
-├── CASO_DE_USO.md
-├── INSTRUCCIONES.md
-├── test.bat
-├── test.ps1
-└── test_simple.ps1
-```
-
-## Pruebas
-
-El proyecto incluye scripts de prueba completos para verificar todas las funcionalidades:
-
-```bash
-# Prueba rápida (PowerShell)
-.\test_simple.ps1
-
-# Prueba completa (PowerShell)
-.\test.ps1
-
-# Prueba completa (CMD)
-test.bat
-```
-
-Ver `TESTS.md` para más información sobre los scripts de prueba.
-
-## Limitaciones Conocidas
-
-1. Solo funciona en Windows (usa Windows API específica)
-2. Los algoritmos implementados son versiones educativas (no usar para datos críticos)
-3. La gestión de memoria para archivos muy grandes puede mejorar
-4. No hay validación exhaustiva de integridad de archivos comprimidos
-
-## Notas de Desarrollo
-
-- El código está comentado en español según los requisitos del proyecto
-- Se utilizan llamadas directas al sistema operativo (Windows API)
-- Todos los algoritmos están implementados desde cero sin librerías externas
-- El código sigue principios de programación orientada a objetos
-
-## Licencia
-
-Este proyecto es parte de un trabajo académico.
-
-## Autor
-
-Desarrollado como trabajo final de Sistemas Operativos.
+---

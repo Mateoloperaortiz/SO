@@ -1,42 +1,19 @@
-# Makefile para compilación del proyecto FileUtil
-# Compilador: g++ (GCC)
-# Sistema: Windows
-
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -Wextra -O2 -pthread
-TARGET = fileutil.exe
-SOURCES = main.cpp file_manager.cpp compressor.cpp encryptor.cpp thread_manager.cpp
-OBJECTS = $(SOURCES:.cpp=.o)
-HEADERS = file_manager.h compressor.h encryptor.h thread_manager.h
+CXXFLAGS = -Wall -std=c++17 -static-libgcc -static-libstdc++
+TARGET = so_final.exe
+SRCS = main.cpp FileManager.cpp Concurrency.cpp Compression.cpp Encryption.cpp
+OBJS = $(SRCS:.cpp=.o)
 
-# Regla principal
 all: $(TARGET)
 
-# Compilar ejecutable
-$(TARGET): $(OBJECTS)
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJECTS)
-	@echo "Compilacion exitosa: $(TARGET)"
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS)
 
-# Compilar archivos objeto
-%.o: %.cpp $(HEADERS)
+%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Limpiar archivos generados
 clean:
-	rm -f $(OBJECTS) $(TARGET)
-	@echo "Archivos eliminados"
+	del $(OBJS) $(TARGET)
 
-# Recompilar desde cero
-rebuild: clean all
-
-# Ayuda
-help:
-	@echo "Makefile para FileUtil"
-	@echo ""
-	@echo "Comandos disponibles:"
-	@echo "  make          - Compilar el proyecto"
-	@echo "  make clean    - Eliminar archivos compilados"
-	@echo "  make rebuild  - Recompilar desde cero"
-	@echo "  make help     - Mostrar esta ayuda"
-
-.PHONY: all clean rebuild help
+run: $(TARGET)
+	./$(TARGET)
